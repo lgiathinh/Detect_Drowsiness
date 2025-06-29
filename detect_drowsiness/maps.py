@@ -1,36 +1,42 @@
+import sys
 import folium
-from PySide6.QtWidgets import QMainWindow, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
 from PySide6.QtWebEngineWidgets import QWebEngineView
-import setting
+import threading
+from http.server import SimpleHTTPRequestHandler
+from socketserver import TCPServer
 
-
-setting.init()
 class MapWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        
-        self.combine_map = None
-        
-        self.marker_count = 0
         self.setWindowTitle("Map Viewer")
-        self.map_file = "google_map.html"
-        self.locations_dms = {
-            'Ho Chi Minh City': (10, 51.15604, "'N'", 106, 45.58957, "'E'"),
-        }
+
+        # Tạo bản đồ Folium
         self.create_map()
+
+        # Giao diện Qt
         self.web_view = QWebEngineView()
-        self.web_view.load("http://localhost:8000/google_map.html")
+        self.web_view.load("http://localhost:8000/google_map.html")  # Dùng máy chủ cục bộ
 
         # Layout
-        self.container = QWidget()
-        layout = QVBoxLayout(self.container)
+        container = QWidget()
+        layout = QVBoxLayout(container)
         layout.addWidget(self.web_view)
-        self.setCentralWidget(self.container)
-            
+        self.setCentralWidget(container)
+        
+    
+
     def create_map(self):
+        # Danh sách thành phố với tọa độ DMS
+        locations_dms = {
+            'New York': (40, 42.48, 'N', 74, 0.36, 'W'),
+            'Los Angeles': (34, 3.132, 'N', 118, 14.622, 'W'),
+            'Chicago': (41, 52.686, 'N', 87, 37.764, 'W'),
+            'Ho Chi Minh City': (10, 51.15604, 'N', 106, 45.58957, 'E')
+        }
         def dms_to_decimal(degrees, minutes, direction):
             decimal = degrees + (minutes / 60)
-            if direction in ['S', 'W']:
+            if direction in ['S', 'W']:  # Nếu là phía Nam hoặc Tây, giá trị âm
                 decimal = -decimal
             return decimal
         
@@ -40,11 +46,13 @@ class MapWindow(QMainWindow):
                 dms_to_decimal(lat_deg, lat_min, lat_dir),
                 dms_to_decimal(lon_deg, lon_min, lon_dir)
             )
-            for city, (lat_deg, lat_min, lat_dir, lon_deg, lon_min, lon_dir) in self.locations_dms.items()
+            for city, (lat_deg, lat_min, lat_dir, lon_deg, lon_min, lon_dir) in locations_dms.items()
         }
 
-        self.combine_map = folium.Map(location=[10.7769, 106.7009], zoom_start=10)
-        print(locations_decimal)
+        # Tạo bản đồ
+        combine_map = folium.Map(location=[10.8512604, 106.759825], zoom_start=10)
+
+        # Thêm điểm đánh dấu
         for index, (location, coordinates) in enumerate(locations_decimal.items(), start=1):
             folium.Marker(
                 location=coordinates,
@@ -54,21 +62,16 @@ class MapWindow(QMainWindow):
                             {index}</div>"""
                 ),
                 popup=f"{location}"
-            ).add_to(self.combine_map)
+            ).add_to(combine_map)
 
-        self.combine_map.save(self.map_file)
+        # Lưu bản đồ ra file
+        self.map_file = "google_map.html"
+        combine_map.save(self.map_file)
 
-    def dms_to_dec(self, deg, min, dir):
-        dec = deg + (min/60)
-        if dir in ['S','W']:
-            dec = -dec
-        return dec
-    
-    
-    def add_location(self,lat_deg, lat_min, lat_dir, lon_deg, lon_min, lon_dir):
-        self.locations_decimal = (lat_deg, lat_min, lat_dir,lon_deg, lon_min, lon_dir)
-        self.locations_dms[f"Coordinates_{self.marker_count}"] = self.locations_decimal
-        print(self.locations_dms)
-        self.marker_count += 1
-        self.create_map()
-        print("Have created new location")
+
+# Máy chủ cục bộ
+def run_server():
+    handler = SimpleHTTPRequestHandler
+    with TCPServer(("", 8000), handler) as httpd:
+        print("Serving at port 8000")
+        httpd.serve_forever()

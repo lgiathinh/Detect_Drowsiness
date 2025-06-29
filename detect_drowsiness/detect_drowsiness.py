@@ -1,38 +1,40 @@
-from PySide6 import QtCore, QtWidgets, QtGui 
+# Import các thư viện cần thiết
+import sys
+from PySide6 import QtCore, QtWidgets, QtGui # Thư viện PySide6 dùng để tạo GUI
+from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
 from PySide6.QtGui import QPixmap
 from PySide6.QtCore import QDateTime
-from PySide6.QtWidgets import QTableWidgetItem
-import cv2  
-import numpy as np  
-import serial.tools.list_ports
-import dlib  
-from imutils import face_utils  
-from scipy.spatial import distance  
-import rpc 
+from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
+import cv2  # OpenCV dùng để xử lý hình ảnh
+import numpy as np  # Thư viện hỗ trợ thao tác với mảng
+import serial.tools.list_ports  # Thư viện hỗ trợ thao tác với cổng Serial
+import dlib  # Thư viện dlib dùng để phát hiện khuôn mặt
+from imutils import face_utils  # Thư viện hỗ trợ các tiện ích liên quan đến khuôn mặt
+from scipy.spatial import distance  # Tính khoảng cách Euclidean giữa các điểm
+from pygame import mixer  # Thư viện dùng để phát âm thanh
+import rpc  # Thư viện hỗ trợ giao tiếp RPC
 from datetime import datetime
 import paho.mqtt.client as mqtt
-import setting
-import time
+import folium
+import threading
+from http.server import SimpleHTTPRequestHandler
+from socketserver import TCPServer
+from PySide6.QtWebEngineWidgets import QWebEngineView
+# Khởi tạo thư viện âm thanh và tải nhạc
 
-setting.init()
-print(setting.M)
+
 ## Define ##
 MQTT_BROKER_URL ="b8fe3c14237c4aefb0823289870c4d8b.s1.eu.hivemq.cloud"
 MQTT_PORT = 8883
 MQTT_CLIENT_ID = "COMPUTER"
-MQTT_USER = "VuUwU"
+MQTT_USER = "VuUwU2"
 MQTT_PW = "VuUwU@123"
 MQTT_CLEAN_SESSION = True
 MQTT_KEEP_ALIVE = 360
 MQTT_VER = 3
 
-# buzzer_flags = 0
-lat_deg = setting.lat_deg
-lat_min = setting.lat_min
-lat_dir = setting.lat_dir
-long_deg = setting.long_deg
-long_min = setting.long_min
-long_dir = setting.long_dir
+buzzer_flags = 0
+
 ## MQTT ##
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,MQTT_CLIENT_ID, clean_session=MQTT_CLEAN_SESSION, protocol=MQTT_VER)
 client.username_pw_set(MQTT_USER, MQTT_PW)
@@ -40,7 +42,7 @@ client.tls_set()  # Uses default SSL/TLS settings
 
 def on_connect(client, userdata, flags, reason_code, properties=None):
     if reason_code == 0:
-        print("Connected successfully to MQTT")
+        print("Connected successfully")
     else:
         print(f"Failed to connect, reason code {reason_code}")
 
@@ -48,53 +50,18 @@ def on_subscribe(mqttc, obj, mid, reason_code_list, properties):
     print("Subscribed: " + str(mid) + " " + str(reason_code_list))
 
 def on_message(client, userdata, message):
-    print(f"Messgae received: Topic'{message.topic}' and msg:'{str(message.payload.decode().strip().lower())}'")
-    if message.topic == "buzzer" and message.payload.decode().strip().lower() == "pressed":
-        buzzer_flags = 0
-    if message.topic == "Location":
-        Location = {message.payload.decode()}
-        print(f"Location: {Location}")
-        lat_deg = parsing_location(Location)[0]
-        lat_min = parsing_location(Location)[1]
-        lat_dir = parsing_location(Location)[2]
-        long_deg = parsing_location(Location)[3]
-        long_min = parsing_location(Location)[4]
-        long_dir = parsing_location(Location)[5]
-        print("Latitude Degrees:", lat_deg)
-        print("Latitude Minutes:", lat_min)
-        print("Latitude Direction:", lat_dir)
-        print("Longitude Degrees:", long_deg)
-        print("Longitude Minutes:", long_min)
-        print("Longitude Direction:", long_dir)
-        setting.lat_deg = lat_deg
-        setting.lat_min = lat_min
-        setting.lat_dir = lat_dir
-        setting.long_deg = long_deg
-        setting.long_min = long_min
-        setting.long_dir = long_dir
-        setting.new_location = 1
-        print("Done transfer to global variables")
-        setting.M.add_location(lat_deg, lat_min, lat_dir, long_deg, long_min, long_dir)
-    if message.topic == "Speed":
-        speed = message.payload.decode().strip()
-        setting.speed = speed
-        print(f"Speed: {speed}")   
-        
-def parsing_location(Location):
-    data_string = list(Location)[0]
-    parts = [part.strip() for part in data_string.split(',')]
-    lat_deg = parts[0]
-    lat_min, lat_dir = parts[1].split("' ")
-    long_deg = parts[2]
-    long_min, long_dir = parts[3].split("' ") 
-    lat_deg = int(lat_deg)
-    lat_min = float(lat_min)
-    long_deg = int(long_deg)
-    long_min = float(long_min)
-    lat_dir = f"'{lat_dir}'"
-    long_dir = f"'{long_dir}'"
-    return lat_deg, lat_min, lat_dir, long_deg, long_min, long_dir
-
+	global buzzer_flags
+	print(f"Messgae received: Topic'{message.topic}' and msg:'{str(message.payload.decode().strip().lower())}'")
+	if message.topic == "buzzer" and message.payload.decode().strip().lower() == "pressed":
+		buzzer_flags = 0
+	if message.topic == "Latitude":
+		Latitude = {message.payload.decode()}
+		# Latitude = Latitude.replace("degree", "° ")
+		print(f"Latitude: {Latitude}")
+	if message.topic == "Longitude":
+		Longitude = {message.payload.decode()}
+		# Longitude = Longitude.replace("degree", "° ")
+		print(f"Longitude: {Longitude}")
 client.on_connect = on_connect
 client.on_message = on_message
 client.on_subscribe = on_subscribe
@@ -110,39 +77,41 @@ def send_msg(topic, msg):
 thresh = 0.25  # Ngưỡng cho tỷ lệ mắt mở
 frame_check = 60  # Số khung hình kiểm tra drowsiness
 
-
+# Tải mô hình phát hiện khuôn mặt của dlib
 detector = dlib.get_frontal_face_detector()
-predict = dlib.shape_predictor("models/shape_predictor_68_face_landmarks.dat")
+predict = dlib.shape_predictor("models/shape_predictor_68_face_landmarks.dat")  # Đường dẫn đến file model của dlib
 
 # Định nghĩa lớp ImgLabel kế thừa QLabel để nhận sự kiện nhấn chuột
 class ImgLabel(QtWidgets.QLabel):
-    clicked = QtCore.Signal() 
+    clicked = QtCore.Signal()  # Tín hiệu được phát khi nhấn chuột
 
     def mousePressEvent(self, ev: QtGui.QMouseEvent):
-        self.status = 'CLICKED'  
-        self.pos_1st = ev.position() 
-        self.clicked.emit()  
+        self.status = 'CLICKED'  # Đánh dấu trạng thái khi nhấn chuột
+        self.pos_1st = ev.position()  # Ghi lại vị trí nhấn chuột
+        self.clicked.emit()  # Phát tín hiệu nhấn chuột
         return super().mousePressEvent(ev)
 
     def mouseReleaseEvent(self, ev: QtGui.QMouseEvent) -> None:
-        self.status = 'RELEASED' 
-        self.pos_2nd = ev.position()  
-        self.clicked.emit() 
+        self.status = 'RELEASED'  # Đánh dấu trạng thái khi thả chuột
+        self.pos_2nd = ev.position()  # Ghi lại vị trí thả chuột
+        self.clicked.emit()  # Phát tín hiệu thả chuột
         return super().mouseReleaseEvent(ev)
 
+# Định nghĩa lớp EspCamWidget kế thừa QWidget để xây dựng giao diện chính
 class EspCamWidget(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
+        # Khởi tạo các biến
         self.rpc_master = None
         self.capture_timer = None
-        self.drowsy_counter = 0  
-        self.drowsy_count = 0  
-        self.yawn_count = 0  
-        self.yawning = False  
-        self.latitude = "NaN"  
-        self.longitude = "NaN"
-        self.speed = "N/A"
-
+        self.drowsy_counter = 0  # Biến đếm số lần phát hiện buồn ngủ liên tiếp
+        self.music_playing = False  # Biến trạng thái của nhạc
+        self.drowsy_count = 0  # Biến đếm tổng số lần phát hiện buồn ngủ
+        self.yawn_count = 0  # Biến đếm số lần ngáp
+        self.yawning = False  # Biến trạng thái ngáp
+        self.latitude = "N/A"  # Giá trị mặc định
+        self.longitude = "N/A"
+        
         # Cập nhật thời gian mỗi giây
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.update_time)
@@ -150,28 +119,20 @@ class EspCamWidget(QtWidgets.QWidget):
         
         
          # Tạo bảng với hai cột có độ rộng bằng nhau
-        self.drowsy_log_table = QtWidgets.QTableWidget(0, 4)
-        self.drowsy_log_table.setHorizontalHeaderLabels(["Thời gian", "Trạng thái", "Vị Trí", "Tốc độ"])
+        self.drowsy_log_table = QtWidgets.QTableWidget(0, 3)
+        self.drowsy_log_table.setHorizontalHeaderLabels(["Thời gian", "Trạng thái", "Vị Trí"])
         header = self.drowsy_log_table.horizontalHeader()
         header.setSectionResizeMode(QtWidgets.QHeaderView.Stretch)  # Đặt độ rộng cột bằng nhau
-        self.drowsy_log_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        self.drowsy_log_table.setFixedHeight(200)
+        self.drowsy_log_table.setFixedHeight(400)
         
         self.populate_ui()  # Tạo giao diện người dùng
-    
-    def update_speed(self, speed):
-        self.speed_label.setText(f"Tốc độ: {setting.speed}")
-
         
     def log_drowsy_event(self):
-        print("New log")
+        # Lấy thời gian hiện tại
         current_time = QDateTime.currentDateTime().toString("HH:mm:ss")
-        self.latitude = f"{setting.lat_deg}, {setting.lat_min}, {setting.lat_dir}" 
-        self.longitude = f"{setting.long_deg}, {setting.long_min}, {setting.long_dir}"
         location_info = f"Vĩ độ: {self.latitude}, Kinh độ: {self.longitude}"
-        self.speed = setting.speed
-        speed_info = f"{self.speed}"
-
+        
+        # Tạo hàng mới với thời gian và thông báo
         row_position = self.drowsy_log_table.rowCount()
         self.drowsy_log_table.insertRow(row_position)
         
@@ -179,7 +140,6 @@ class EspCamWidget(QtWidgets.QWidget):
         self.drowsy_log_table.setItem(row_position, 0, QTableWidgetItem(current_time))
         self.drowsy_log_table.setItem(row_position, 1, QTableWidgetItem("Tài xế ngủ gật"))
         self.drowsy_log_table.setItem(row_position, 2, QTableWidgetItem(location_info))
-        self.drowsy_log_table.setItem(row_position, 3, QTableWidgetItem(speed_info))
         
         # Bật tính năng word wrap
         self.drowsy_log_table.setWordWrap(True)
@@ -202,9 +162,10 @@ class EspCamWidget(QtWidgets.QWidget):
         self.main_layout.addLayout(self.image_layout)
         self.main_layout.addLayout(self.ctrl_layout)
         
+        # Thêm nhãn hiển thị số lần buồn ngủ
         self.drowsy_count_label = QtWidgets.QLabel("Drowsy Count: 0")
-        self.drowsy_count_label.setFixedHeight(40) 
-
+        self.drowsy_count_label.setFixedHeight(40)  # Đặt chiều rộng cố định
+        # Thiết lập CSS cho nhãn
         self.drowsy_alert_label = QtWidgets.QLabel("")
         self.drowsy_count_label.setStyleSheet("""
             QLabel {
@@ -322,18 +283,13 @@ class EspCamWidget(QtWidgets.QWidget):
         self.ctrl_layout.addRow(self.esp32_button)
 
     def connect_esp32(self):
-        global connect
         # Kết nối đến ESP32 qua cổng được chọn
         port = self.esp32_port.currentText()
-        connect = 1
         try:
-            print(connect)
             self.rpc_master = rpc.rpc_usb_vcp_master(port)
             self.esp32_button.setText("Connected")
             self.esp32_button.setEnabled(False)
-            self.capture_photo()
-            if connect == 1:
-                self.start_capture_timer()  # Bắt đầu chụp ảnh sau khi kết nối
+            self.start_capture_timer()  # Bắt đầu chụp ảnh sau khi kết nối
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", str(e))
 
@@ -341,12 +297,12 @@ class EspCamWidget(QtWidgets.QWidget):
         # Khởi tạo bộ đếm thời gian để chụp ảnh mỗi giây
         self.capture_timer = QtCore.QTimer(self)
         self.capture_timer.timeout.connect(self.capture_photo)
-        self.capture_timer.start(100)
-        
+        self.capture_timer.start(1000)
+
     def capture_photo(self):
-        global connect
         if self.rpc_master is None:
             return
+
         try:
             result = self.rpc_master.call("jpeg_image_snapshot", recv_timeout=1000)
             if result is not None:
@@ -363,36 +319,29 @@ class EspCamWidget(QtWidgets.QWidget):
                     shape = predict(gray, subject)
                     shape = face_utils.shape_to_np(shape)
                     
+                    # Kiểm tra ngáp
                     if self.detect_yawn(shape):
                         print("Yawn detected")
 
+                    
+                    # Kiểm tra buồn ngủ
                     drowsy = self.detect_drowsiness(img)
                     if drowsy:
                         self.drowsy_counter += 1
                         if self.drowsy_counter >= 3:
-                            send_msg("buzzer","on")
-                            time.sleep(1)
-                            self.buzzer_flags = 1
-                            self.drowsy_counter = 0
                             self.update_drowsy_alert()
                             self.update_drowsy_count()
-                            try: 
-                                if setting.new_location!=0:
-                                    self.log_drowsy_event()
-                            except:
-                                continue
+                            self.log_drowsy_event()  # Ghi lại sự kiện vào bảng
+                            send_msg("buzzer","on")
+                            self.buzzer_flags = 1
                             self.drowsy_counter = 0
                     else:
                         self.drowsy_counter = 0
+
                 # Cập nhật hình ảnh hiển thị
                 self.update_image(img.copy())
-                connect = 1
             else:
                 QtWidgets.QMessageBox.warning(self, "Warning", "Failed to capture photo.")
-                self.esp32_button.setEnabled(True)
-                self.esp32_button.setText("Connect")
-                connect = 0
-                return
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", str(e))
 
@@ -423,7 +372,7 @@ class EspCamWidget(QtWidgets.QWidget):
         low_mean = np.mean(low_lip, axis=0)
         
         lip_distance = distance.euclidean(top_mean, low_mean)
-        yawn_thresh = 12  # Ngưỡng để phát hiện ngáp, có thể điều chỉnh
+        yawn_thresh = 15  # Ngưỡng để phát hiện ngáp, có thể điều chỉnh
 
         if lip_distance > yawn_thresh:
             # Nếu miệng đang mở và trạng thái hiện tại là không ngáp, đánh dấu là bắt đầu ngáp
@@ -436,7 +385,7 @@ class EspCamWidget(QtWidgets.QWidget):
                 self.update_yawn_count()  # Cập nhật số lần ngáp
                 return True  # Phát hiện một lần ngáp hoàn chỉnh
 
-        return False  
+        return False  # Không phát hiện ngáp hoặc đang trong quá trình ngáp`
 
 
     def eye_aspect_ratio(self, eye):
@@ -448,6 +397,7 @@ class EspCamWidget(QtWidgets.QWidget):
         return ear
 
     def update_image(self, img):
+        # Cập nhật hình ảnh trên giao diện
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         h, w, c = img.shape
         img = QtGui.QImage(img.data, w, h, QtGui.QImage.Format_RGB888)
@@ -455,6 +405,7 @@ class EspCamWidget(QtWidgets.QWidget):
         self.preview_img.setPixmap(pixmap.scaled(320, 240, QtCore.Qt.KeepAspectRatio))
 
     def closeEvent(self, event):
+        # Hàm xử lý sự kiện đóng cửa sổ
         if self.rpc_master is not None:
             self.rpc_master.close()
             
